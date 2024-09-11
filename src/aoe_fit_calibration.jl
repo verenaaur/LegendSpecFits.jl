@@ -26,7 +26,7 @@ function fit_aoe_corrections(e::Array{<:Unitful.Energy{<:Real}}, μ::Array{<:Rea
     func_generic_µ = "p1 + ($e_expression) * p2" #  "p[1] + ($e_expression) * p[2]"
     par_µ = [result_µ.par[i] ./ e_unit^(i-1) for i=1:length(result_µ.par)] # add units
     result_µ = merge(result_µ, (par = par_µ, func = func_µ, func_generic = func_generic_µ, µ = µ)) 
-    report_µ = merge(report_µ, (e_unit = e_unit, label_y = "µ", label_fit = "Best Fit: $(mvalue(round(result_µ.par[1], digits=2))) + E * $(mvalue(round(ustrip(result_µ.par[2]) * 1e6, digits=2)))1e-6"))
+    report_µ = merge(report_µ, (e_unit = e_unit, label_y = "µ", label_fit = "Best Fit: $(mvalue(round(result_µ.par[1], digits=2))) + E * $(mvalue(round(ustrip(result_µ.par[2]) * 1e6, digits=2)))e-6"))
     @debug "Compton band µ correction: $(result_µ.func)"
 
     # fit compton band σ with sqrt function 

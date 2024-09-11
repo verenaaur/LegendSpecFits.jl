@@ -247,3 +247,110 @@ function fit_single_aoe_compton(h::Histogram, ps::NamedTuple; uncertainty::Bool=
     
     return result, report
 end
+
+###############################################################
+# new fit function with two EMGs
+###############################################################
+
+function mod_fit_aoe_all_compton(h::Histogram, ps::NamedTuple; uncertainty::Bool=true, fit_func::Symbol=:f_fit, background_center::Union{Real,Nothing} = ps.peak_pos, fixed_position::Bool=false) # use this function to modify the fit function without deleting everything what was done before
+    pseudo_prior = NamedTupleDist(     # create pseudo priors
+            μ = Normal(ps.peak_pos, ps.peak_sigma/6),
+            σ = Normal(ps.peak_sigma, ps.peak_sigma/6),
+            n = LogNormal(log(ps.peak_counts), 1.0),
+            B = Normal(ps.mean_background, 0.2*ps.mean_background/3),
+            δ = weibull_from_mx(0.1, 0.8),
+            μ2 = Normal(-15, 5),
+            σ2 = LogNormal(log(10), 0.5),
+            B2 = Normal(ps.mean_background, 0.2*ps.mean_background/3),
+            δ2 = LogNormal(log(10), 1)
+            )
+
+    f_trafo = BAT.DistributionTransform(Normal, pseudo_prior)     # transform back to frequency space
+    v_init = mean(pseudo_prior)     # start values for MLE
+
+   fit_function = mod_get_aoe_fit_functions(; )[fit_func]
+   f_loglike = let f_fit=fit_function, h=h
+       v -> hist_loglike(x -> x in Interval(extrema(h.edges[1])...) ? f_fit(x, v) : 0, h)
+   end
+
+    # MLE
+    opt_r = optimize((-) ∘ f_loglike ∘ inverse(f_trafo), f_trafo(v_init), Optim.Options(time_limit = 60, iterations = 10000))
+    converged = Optim.converged(opt_r)
+    if converged @warn "Fit did converge" end
+    if !converged @warn "Fit did not converge" end
+
+    # best fit results
+    v_ml = inverse(f_trafo)(Optim.minimizer(opt_r))
+
+    if uncertainty
+
+        f_loglike_array(v) = - f_loglike(array_to_tuple(v, v_ml))
+        # Calculate the Hessian matrix using ForwardDiff
+        H = ForwardDiff.hessian(f_loglike_array, tuple_to_array(v_ml))
+
+        param_covariance = nothing
+        if !all(isfinite.(H))
+            @warn "Hessian matrix is not finite"
+            param_covariance = zeros(length(v_ml), length(v_ml))
+        else
+            # Calculate the parameter covariance matrix using pseudo-inverse
+            param_covariance = pinv(H)
+        end
+        if ~isposdef(param_covariance)
+            param_covariance = nearestSPD(param_covariance)
+        end
+        # Extract the parameter uncertainties
+        v_ml_err = array_to_tuple(sqrt.(abs.(diag(param_covariance))), v_ml)
+
+        # get p-value 
+        pval, chi2, dof = p_value(fit_function, h, v_ml)
+
+        # calculate normalized residuals
+        residuals, residuals_norm, _, bin_centers = get_residuals(fit_function, h, v_ml)
+        
+        @debug "Best Fit values: "
+        @debug "μ: $(v_ml.μ)"
+        @debug "σ: $(v_ml.σ)"
+        @debug "n: $(v_ml.n)"
+        @debug "B: $(v_ml.B)"
+        @debug "δ: $(v_ml.δ)"
+        @debug "μ2: $(v_ml.μ2)"
+        @debug "σ2: $(v_ml.σ2)"
+        @debug "B2: $(v_ml.B2)"
+        @debug "δ2: $(v_ml.δ2)"
+
+        result = merge(NamedTuple{keys(v_ml)}([measurement(v_ml[k], v_ml_err[k]) for k in keys(v_ml)]...),
+                (gof = (pvalue = pval, chi2 = chi2, dof = dof, covmat = param_covariance, 
+                residuals = residuals, residuals_norm = residuals_norm, bin_centers = bin_centers),))
+        
+        report = (
+            v = v_ml,
+            h = h,
+            f_fit = x -> Base.Fix2(fit_function, v_ml)(x),
+            f_components = mod_aoe_compton_peakshape_components(fit_func, v_ml),
+            gof = merge(result.gof, (residuals = residuals, residuals_norm = residuals_norm,))        )
+    else
+
+        @debug "Best Fit values: "
+        @debug "μ: $(v_ml.μ)"
+        @debug "σ: $(v_ml.σ)"
+        @debug "n: $(v_ml.n)"
+        @debug "B: $(v_ml.B)"
+        @debug "δ: $(v_ml.δ)"
+        @debug "μ2: $(v_ml.μ2)"
+        @debug "σ2: $(v_ml.σ2)"
+        @debug "B2: $(v_ml.B2)"
+        @debug "δ2: $(v_ml.δ2)"
+
+        result = merge(v_ml, )
+        report = (
+            v = v_ml,
+            h = h,
+            f_fit = x -> Base.Fix2(fit_function, v_ml)(x),
+            f_components = mod_aoe_compton_peakshape_components(fit_func, v_ml; background_center = background_center),
+            gof = NamedTuple()
+        )
+    end
+
+    return result, report
+end

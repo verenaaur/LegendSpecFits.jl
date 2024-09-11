@@ -279,3 +279,187 @@ function fit_aoe_compton_combined(peakhists::Vector{<:Histogram}, peakstats::Str
     return result, report
 end
 export fit_aoe_compton_combined
+
+
+function fit_aoe_compton_combined_mod(peakhists::Vector{<:Histogram}, peakstats::StructArray, compton_bands::Array{T}, result_corrections::NamedTuple; fit_func::Symbol = :f_fit, uncertainty::Bool=false) where T<:Unitful.Energy{<:Real}
+    
+    μA = ustrip(result_corrections.μ_compton.par[1])
+    μB = ustrip(result_corrections.μ_compton.par[2])
+    σA = ustrip(result_corrections.σ_compton.par[1])
+    σB = ustrip(result_corrections.σ_compton.par[2])
+    
+    # create pseudo priors
+    pseudo_prior = NamedTupleDist(
+        μA = Normal(mvalue(μA), let ΔμA = muncert(μA); ifelse(isnan(ΔμA), abs(0.1*mvalue(μA)), ΔμA) end),
+        μB = Normal(mvalue(μB), let ΔμB = muncert(μB); ifelse(isnan(ΔμB), abs(0.1*mvalue(μB)), ΔμB) end),
+        σA = Normal(mvalue(σA), let ΔσA = muncert(σA); ifelse(isnan(ΔσA), abs(0.1*mvalue(σA)), ΔσA) end),
+        σB = Normal(mvalue(σB), let ΔσB = muncert(σB); ifelse(isnan(ΔσB), abs(0.1*mvalue(σB)), ΔσB) end),
+    )
+    
+    # transform back to frequency space
+    f_trafo = BAT.DistributionTransform(Normal, pseudo_prior)
+    
+    # start values for MLE
+    v_init = mean(pseudo_prior)
+
+    # create loglikehood function
+    f_loglike = pars -> begin
+        
+        neg_log_likelihoods = zeros(typeof(pars.μA), length(compton_bands))
+
+        # iterate through all peaks (multithreaded)
+        Threads.@threads for i in eachindex(compton_bands)
+
+            # get histogram and peakstats
+            h  = peakhists[i]
+            ps = peakstats[i]
+            e = ustrip(compton_bands[i])
+            μ = f_aoe_mu(e, (pars.μA, pars.μB))
+            σ = f_aoe_sigma(e, (pars.σA, pars.σB))
+
+            # fit peak
+            try
+                neg_log_likelihoods[i] = fit_single_aoe_compton_with_fixed_μ_and_σ(h, μ, σ, ps; just_likelihood = true, fit_func=fit_func)
+            catch e
+                @warn "Error fitting band $(compton_bands[i]): $e"
+                continue
+            end
+        end
+        return sum(neg_log_likelihoods)
+    end
+    
+    # MLE
+    opt_r = optimize(f_loglike ∘ inverse(f_trafo), f_trafo(v_init), NelderMead(), Optim.Options(time_limit = 120, show_trace=false, iterations = 1000))
+
+    converged = Optim.converged(opt_r)
+    !converged && @warn "Fit did not converge"
+
+    v_ml = inverse(f_trafo)(Optim.minimizer(opt_r))
+
+    v_results = Vector{NamedTuple{(:μ, :σ, :n, :B, :δ, :gof)}}(undef, length(compton_bands))
+    v_reports = Vector{NamedTuple{(:v, :h, :f_fit, :f_components, :gof)}}(undef, length(compton_bands))
+    
+    let pars = v_ml
+        
+        # iterate throuh all peaks (multithreaded)
+        Threads.@threads for i in eachindex(compton_bands)
+
+            # get histogram and peakstats
+            h  = peakhists[i]
+            ps = peakstats[i]
+            e = ustrip(compton_bands[i])
+            μ = f_aoe_mu(e, (pars.μA, pars.μB))
+            σ = f_aoe_sigma(e, (pars.σA, pars.σB))
+
+            # fit peak
+            try
+                v_results[i], v_reports[i] = fit_single_aoe_compton_with_fixed_μ_and_σ(h, μ, σ, ps; just_likelihood=false, fit_func=fit_func, uncertainty=uncertainty)
+            catch e
+                @warn "Error fitting band $(compton_bands[i]): $e"
+                continue
+            end
+        end
+    end
+
+    band_results = Dict{T, NamedTuple}(compton_bands .=> v_results)
+    band_reports = Dict{T, NamedTuple}(compton_bands .=> v_reports)
+
+    if uncertainty && converged
+
+        f_loglike_array = array -> begin
+            pars = array_to_tuple(array, v_ml)
+        
+            neg_log_likelihoods = zeros(typeof(pars.μA), length(compton_bands))
+
+            # iterate through all peaks (multithreaded)
+            for i in eachindex(compton_bands)
+
+                # get histogram and peakstats
+                h  = peakhists[i]
+                ps = peakstats[i]
+                e = ustrip(compton_bands[i])
+                μ = f_aoe_mu(e, (pars.μA, pars.μB))
+                σ = f_aoe_sigma(e, (pars.σA, pars.σB))
+
+                # fit peak
+                try
+                    neg_log_likelihoods[i] = fit_single_aoe_compton_with_fixed_μ_and_σ(h, μ, σ, ps; just_likelihood=true, fit_func=fit_func)
+                catch e
+                    @warn "Error fitting band $(compton_bands[i]): $e"
+                    continue
+                end
+            end
+            return sum(neg_log_likelihoods)
+        end
+
+        # Calculate the Hessian matrix using ForwardDiff
+        H = ForwardDiff.hessian(f_loglike_array, tuple_to_array(v_ml))
+
+        param_covariance = nothing
+        if !all(isfinite.(H))
+            @warn "Hessian matrix is not finite"
+            param_covariance = zeros(length(v_ml), length(v_ml))
+        else
+            # Calculate the parameter covariance matrix
+            param_covariance = inv(H)
+        end
+        if ~isposdef(param_covariance)
+            param_covariance = nearestSPD(param_covariance)
+        end
+        # Extract the parameter uncertainties
+        v_ml_err = array_to_tuple(sqrt.(abs.(diag(param_covariance))), v_ml)
+
+        # sum chi2 and dof of individual fits to compute the p-value for the combined fits
+        chi2 = reduce((acc, x) -> acc + x.gof.chi2, values(band_results), init = 0.)
+        dof  = reduce((acc, x) -> acc + x.gof.dof, values(band_results), init = 0.)
+        pval = ccdf(Chisq(dof), chi2)
+
+        # concatenate the normalized residuals of all individual fits
+        residuals      = vcat(getproperty.(values(band_reports), :gof), :residuals)
+        residuals_norm = vcat(getproperty.(values(band_reports), :gof), :residuals_norm)
+
+        @debug "Best Fit values"
+        @debug "μA: $(v_ml.μA) ± $(v_ml_err.μA)"
+        @debug "μB: $(v_ml.μB) ± $(v_ml_err.μB)"
+        @debug "σA: $(v_ml.σA) ± $(v_ml_err.σA)"
+        @debug "σB: $(v_ml.σB) ± $(v_ml_err.σB)"
+
+        result = merge(NamedTuple{keys(v_ml)}([measurement(v_ml[k], v_ml_err[k]) for k in keys(v_ml)]...),
+                (gof = (pvalue = pval, chi2 = chi2, dof = dof, covmat = param_covariance, 
+                residuals = residuals, residuals_norm = residuals_norm),) #, bin_centers = bin_centers),)
+                )
+    else
+        @debug "Best Fit values"
+        @debug "μA: $(v_ml.μA)"
+        @debug "μB: $(v_ml.μB)"
+        @debug "σA: $(v_ml.σA)"
+        @debug "σB: $(v_ml.σB)"
+
+        result = merge(v_ml, )
+    end
+
+    ##### NEW PART -> define xvalues which are the starting energies of the 47 compton bands + unit + fit functions + y values and safe it in the report
+    e_expression = ustrip.(compton_bands) #eventually add "10" which is half of the Compton window to be in the middle of the Compton bands
+    e_unit = unit(first(compton_bands)) #don't use this in the code rn, but could use it for the result
+    
+    label_fit_µ = "Combined Fit: $(round(mvalue(v_ml.μA), digits=2)) + E * $(round(mvalue(v_ml.μB)*1e6, digits=2))e-6"
+    label_fit_σ = "Combined Fit: sqrt($(round(mvalue(v_ml.σA)*1e6, digits=1))e-6 + $(round(ustrip(mvalue(v_ml.σB)), digits=2)) / E^2)"
+    
+    # Calculate µ and σ for each value in e_expression -> use f_aoe_mu and f_aoe_sigma functions
+    μ_values = f_aoe_mu(e_expression, (v_ml.μA, v_ml.μB))
+    σ_values = f_aoe_sigma(e_expression, (v_ml.σA, v_ml.σB))
+
+    # Add µ and σ related things to the individual report
+    report_µ = (; values = µ_values, label_y = "µ", label_fit = label_fit_µ, energy = e_expression)
+    report_σ = (; values = σ_values, label_y = "σ", label_fit = label_fit_σ, energy = e_expression)
+
+    # Add report_µ and report_σ to the final report
+    report = (
+        v = v_ml,
+        report_µ = report_µ,
+        report_σ = report_σ,
+        band_reports = band_reports
+    )
+    return result, report
+end
+export fit_aoe_compton_combined_mod
