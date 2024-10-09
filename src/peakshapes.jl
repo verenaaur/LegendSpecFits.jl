@@ -206,14 +206,15 @@ function aoe_compton_peakshape(
 end
 export aoe_compton_peakshape
 
-function mod_aoe_compton_peakshape( # two EMGs
+function two_emg_aoe_compton_peakshape( # two EMGs
     x::Real, 
     μ::Real, σ::Real, n::Real, background::Real, δ::Real, 
     μ2::Real, σ2::Real, background2::Real, δ2::Real
 )
     return n * gauss_pdf(x, μ, σ) + background * ex_gauss_pdf(-x, -μ, σ, δ) + background2 * ex_gauss_pdf(-x, -μ2, σ2, δ2)
 end
-export mod_aoe_compton_peakshape
+export two_emg_aoe_compton_peakshape
+
 
 """
     aoe_compton_signal_peakshape(
@@ -245,7 +246,7 @@ function aoe_compton_background_peakshape(
 end
 export aoe_compton_background_peakshape
 
-function mod_aoe_compton_background_peakshape( # two EMGs
+function two_emg_aoe_compton_background_peakshape( # two EMGs
     x::Real, 
     μ::Real, σ::Real, background::Real, δ::Real,
     μ2::Real, σ2::Real, background2::Real, δ2::Real
@@ -253,6 +254,24 @@ function mod_aoe_compton_background_peakshape( # two EMGs
     return background * ex_gauss_pdf(-x, -μ, σ, δ) + background2 * ex_gauss_pdf(-x, -μ2, σ2, δ2)
 end
 export mod_aoe_compton_background_peakshape
+
+function aoe_compton_background_peakshape_one( # first EMG
+    x::Real, 
+    μ::Real, σ::Real, background::Real, δ::Real
+)
+    return background * ex_gauss_pdf(-x, -μ, σ, δ)
+end
+export aoe_compton_background_peakshape_one
+
+function aoe_compton_background_peakshape_two( # second EMG
+    x::Real, 
+    μ2::Real, σ2::Real, background2::Real, δ2::Real
+)
+    return background2 * ex_gauss_pdf(-x, -μ2, σ2, δ2)
+end
+export aoe_compton_background_peakshape_two
+
+
 """
     double_gaussian(
         x::Real, μ1::Real, σ1::Real, n1::Real, 

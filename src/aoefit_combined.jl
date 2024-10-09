@@ -9,7 +9,7 @@ Fit a single A/E Compton band using the `f_aoe_compton` function consisting of a
     * `neg_log_likelihood`: The negative log-likelihood of the likelihood fit
     * `report`: Dict of NamedTuples of the fit report which can be plotted for each compton band
 """
-function fit_single_aoe_compton_with_fixed_μ_and_σ(h::Histogram, μ::Number, σ::Number, ps::NamedTuple; just_likelihood::Bool = false, fit_func::Symbol = :f_fit, background_center::Union{Real,Nothing} = μ, uncertainty::Bool=false)
+function fit_single_aoe_compton_with_fixed_μ_and_σ(h::Histogram, μ::Number, σ::Number, ps::NamedTuple; just_likelihood::Bool = false, fit_func::Symbol = :aoe_one_bck, background_center::Union{Real,Nothing} = μ, uncertainty::Bool=false)
     # create pseudo priors
 
     pseudo_prior = get_aoe_pseudo_prior(h, ps, fit_func;
@@ -30,10 +30,10 @@ function fit_single_aoe_compton_with_fixed_μ_and_σ(h::Histogram, μ::Number, �
     end
 
     # MLE
-    opt_r = optimize((-) ∘ f_loglike ∘ inverse(f_trafo), f_trafo(v_init))
-
+    #opt_r = optimize((-) ∘ f_loglike ∘ inverse(f_trafo), f_trafo(v_init))
+    opt_r = optimize((-) ∘ f_loglike ∘ inverse(f_trafo), f_trafo(v_init), Optim.Options(iterations = 3000)) # iterations from 3000 to 10000 and see if it works now
     converged = Optim.converged(opt_r)
-    !converged && @warn "Fit did not converge"
+    !converged && @warn "Fit did not converge (single fixed µ and σ)"
 
     if just_likelihood return Optim.minimum(opt_r) end
 
@@ -114,7 +114,7 @@ assuming `f_aoe_mu` for μ and `f_aoe_sigma` for σ.
     * `v_ml`: The fit result from the maximum-likelihood fit.
     * `report`: Dict of NamedTuples of the fit report which can be plotted for each compton band
 """
-function fit_aoe_compton_combined(peakhists::Vector{<:Histogram}, peakstats::StructArray, compton_bands::Array{T}, result_corrections::NamedTuple; fit_func::Symbol = :f_fit, uncertainty::Bool=false) where T<:Unitful.Energy{<:Real}
+function fit_aoe_compton_combined(peakhists::Vector{<:Histogram}, peakstats::StructArray, compton_bands::Array{T}, result_corrections::NamedTuple; fit_func::Symbol = :aoe_one_bck, uncertainty::Bool=false) where T<:Unitful.Energy{<:Real}
     
     μA = ustrip(result_corrections.μ_compton.par[1])
     μB = ustrip(result_corrections.μ_compton.par[2])
@@ -162,8 +162,7 @@ function fit_aoe_compton_combined(peakhists::Vector{<:Histogram}, peakstats::Str
     end
     
     # MLE
-    opt_r = optimize(f_loglike ∘ inverse(f_trafo), f_trafo(v_init), NelderMead(), Optim.Options(time_limit = 120, show_trace=false, iterations = 1000))
-
+    opt_r = optimize(f_loglike ∘ inverse(f_trafo), f_trafo(v_init), LBFGS(), Optim.Options(time_limit = 120, show_trace=false, iterations = 5000))
     converged = Optim.converged(opt_r)
     !converged && @warn "Fit did not converge"
 
@@ -281,7 +280,7 @@ end
 export fit_aoe_compton_combined
 
 
-function fit_aoe_compton_combined_mod(peakhists::Vector{<:Histogram}, peakstats::StructArray, compton_bands::Array{T}, result_corrections::NamedTuple; fit_func::Symbol = :f_fit, uncertainty::Bool=false) where T<:Unitful.Energy{<:Real}
+function fit_aoe_compton_combined_mod(peakhists::Vector{<:Histogram}, peakstats::StructArray, compton_bands::Array{T}, result_corrections::NamedTuple; fit_func::Symbol = :aoe_one_bck, uncertainty::Bool=false) where T<:Unitful.Energy{<:Real}
     
     μA = ustrip(result_corrections.μ_compton.par[1])
     μB = ustrip(result_corrections.μ_compton.par[2])
@@ -329,8 +328,7 @@ function fit_aoe_compton_combined_mod(peakhists::Vector{<:Histogram}, peakstats:
     end
     
     # MLE
-    opt_r = optimize(f_loglike ∘ inverse(f_trafo), f_trafo(v_init), NelderMead(), Optim.Options(time_limit = 120, show_trace=false, iterations = 1000))
-
+    opt_r = optimize(f_loglike ∘ inverse(f_trafo), f_trafo(v_init), LBFGS(), Optim.Options(time_limit = 120, show_trace=false, iterations = 5000))
     converged = Optim.converged(opt_r)
     !converged && @warn "Fit did not converge"
 
