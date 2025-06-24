@@ -115,7 +115,13 @@ function fit_single_peak_th228(h::Histogram, ps::NamedTuple{(:peak_pos, :peak_fw
         H = ForwardDiff.hessian(f_loglike_array, tuple_to_array(v_ml))
 
         # Calculate the parameter covariance matrix
-        param_covariance_raw = inv(H)
+        #param_covariance_raw = inv(H)
+        param_covariance_raw = try
+            inv(H)
+        catch e
+            @warn "Still singular after SPD correction, using pseudoinverse" exception=(e, catch_backtrace())
+            pinv(nearestSPD(H))
+        end
         param_covariance = nearestSPD(param_covariance_raw)
 
         # Extract the parameter uncertainties
@@ -334,7 +340,13 @@ function fit_subpeaks_th228(
         H = ForwardDiff.hessian(f_loglike_array, tuple_to_array(v_ml))
 
         # Calculate the parameter covariance matrix
-        param_covariance_raw = inv(H)
+        #param_covariance_raw = inv(H)
+        param_covariance_raw = try
+            inv(H)
+        catch e
+            @warn "Still singular after SPD correction, using pseudoinverse" exception=(e, catch_backtrace())
+            pinv(nearestSPD(H))
+        end
         param_covariance = nearestSPD(param_covariance_raw)
 
         # Extract the parameter uncertainties
